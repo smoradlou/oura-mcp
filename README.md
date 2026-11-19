@@ -2,13 +2,29 @@
 
 A read-only MCP server for your Oura Ring data (Oura API v2).
 
-## 1. Get a token
-Create a personal access token at https://cloud.ouraring.com/personal-access-tokens
-(or use an OAuth2 access token from an Oura API app with the `personal daily heartrate workout tag session spo2` scopes).
+Oura retired personal access tokens in December 2025, so this server signs in with OAuth2.
+You sign in once and tokens refresh automatically after that.
 
-## 2. Add it to Claude Code
+## 1. Register an Oura API application
+In Oura's developer portal, create an application (it's self-serve, no approval needed for personal use):
+- **Redirect URI:** `http://localhost:8765/callback`
+- Note the **Client ID** and **Client Secret**.
+
+If the portal rejects a plain-http localhost redirect, register any HTTPS URL you control
+(e.g. `https://example.com/oura-callback`) and set `OURA_REDIRECT_URI` to it in step 2.
+Login will then ask you to paste the URL your browser lands on.
+
+## 2. Sign in once
 ```bash
-claude mcp add oura -e OURA_ACCESS_TOKEN=YOUR_TOKEN -- uv run --directory /path/to/oura-mcp oura-mcp
+git clone https://github.com/smoradlou/oura-mcp && cd oura-mcp
+OURA_CLIENT_ID=... OURA_CLIENT_SECRET=... uv run oura-mcp login
+```
+A browser opens, you approve access, and tokens are saved to `~/.config/oura-mcp/tokens.json`
+(readable only by you). Oura refresh tokens are single-use; the server saves each new one.
+
+## 3. Add it to Claude Code
+```bash
+claude mcp add oura -- uv run --directory "$PWD" oura-mcp
 ```
 
 Or in Claude Desktop's `claude_desktop_config.json`:
@@ -17,12 +33,20 @@ Or in Claude Desktop's `claude_desktop_config.json`:
   "mcpServers": {
     "oura": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/oura-mcp", "oura-mcp"],
-      "env": { "OURA_ACCESS_TOKEN": "YOUR_TOKEN" }
+      "args": ["run", "--directory", "/path/to/oura-mcp", "oura-mcp"]
     }
   }
 }
 ```
+
+If you ever see "Run `oura-mcp login` again", repeat step 2.
+
+| Env var | Purpose |
+|---|---|
+| `OURA_CLIENT_ID`, `OURA_CLIENT_SECRET` | Used by `login` (prompted for if unset) |
+| `OURA_REDIRECT_URI` | Default `http://localhost:8765/callback` |
+| `OURA_TOKEN_FILE` | Default `~/.config/oura-mcp/tokens.json` |
+| `OURA_ACCESS_TOKEN` | Use this access token directly and skip the token file |
 
 ## Tools
 | Tool | What it returns |
@@ -40,4 +64,4 @@ Or in Claude Desktop's `claude_desktop_config.json`:
 Date tools take `start_date` / `end_date` (YYYY-MM-DD) and default to the last 7 days.
 
 ## Test
-`python test_smoke.py` runs every tool over MCP stdio against a fake Oura API.
+`python test_smoke.py` runs the login flow, token refresh (including single-use refresh token rotation) and every tool over MCP stdio against a fake Oura API and OAuth server.

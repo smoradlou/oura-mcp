@@ -1,10 +1,10 @@
 """Oura Ring MCP server.
 
-Exposes the Oura API v2 (https://cloud.ouraring.com/v2/docs) as MCP tools so an
+Exposes the Oura API v2 (https://api.ouraring.com/v2/docs) as MCP tools so an
 assistant can read your sleep, readiness, activity, heart rate and more.
 
-Auth: set OURA_ACCESS_TOKEN to a personal access token or an OAuth2 access token
-(scopes: personal daily heartrate workout tag session spo2).
+Auth: OAuth2. Run `oura-mcp login` once; tokens are saved locally and refreshed
+automatically (see oura_auth.py). OURA_ACCESS_TOKEN overrides this if set.
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ from typing import Any
 
 import httpx
 from mcp.server.mcpserver import MCPServer
+
+from oura_auth import TokenManager, login
 
 API_BASE = os.environ.get("OURA_API_BASE", "https://api.ouraring.com/v2/usercollection")
 MAX_PAGES = 20
@@ -29,23 +31,13 @@ mcp = MCPServer(
 )
 
 _client: httpx.AsyncClient | None = None
+_tokens = TokenManager()
 
 
 def _get_client() -> httpx.AsyncClient:
     global _client
     if _client is None:
-        token = os.environ.get("OURA_ACCESS_TOKEN") or os.environ.get("OURA_TOKEN")
-        if not token:
-            raise RuntimeError(
-                "OURA_ACCESS_TOKEN is not set. Create a token at "
-                "https://cloud.ouraring.com/personal-access-tokens (or via Oura OAuth) "
-                "and pass it in the MCP server's env."
-            )
-        _client = httpx.AsyncClient(
-            base_url=API_BASE,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30.0,
-        )
+        _client = httpx.AsyncClient(base_url=API_BASE, timeout=30.0)
     return _client
 
 
@@ -58,9 +50,14 @@ def _date_range(start_date: str | None, end_date: str | None, default_days: int 
 
 
 async def _get(path: str, params: dict[str, Any] | None = None) -> Any:
-    resp = await _get_client().get(path, params={k: v for k, v in (params or {}).items() if v is not None})
+    clean = {k: v for k, v in (params or {}).items() if v is not None}
+    token = await _tokens.access_token()
+    resp = await _get_client().get(path, params=clean, headers={"Authorization": f"Bearer {token}"})
+    if resp.status_code == 401 and _tokens.can_refresh:
+        token = await _tokens.access_token(force_refresh=True)
+        resp = await _get_client().get(path, params=clean, headers={"Authorization": f"Bearer {token}"})
     if resp.status_code == 401:
-        raise RuntimeError("Oura rejected the token (401). Check OURA_ACCESS_TOKEN.")
+        raise RuntimeError("Oura rejected the token (401). Run `oura-mcp login` again.")
     if resp.status_code == 403:
         raise RuntimeError(
             "Oura returned 403: the token lacks the scope for this data, or the "
@@ -303,6 +300,11 @@ async def get_daily_overview(start_date: str | None = None, end_date: str | None
 
 
 def main() -> None:
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "login":
+        login(sys.argv[2:])
+        return
     mcp.run()
 
 
